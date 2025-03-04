@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np 
 import streamlit as st 
 from datetime import datetime, timedelta
-
+from time import sleep
 FEATURES = ['hour','dayofweek','quarter','month','dayofyear','dayofmonth','weekofyear']
 
 def add_lags(df):
@@ -81,35 +81,40 @@ def predict(future_w_features,classifier):
 
 
 
-def get_recent_data(last_timestamp,df):
+def get_recent_data(df,i=[0]):
 
     """Generate and return data from last timestamp to now, at most 60 seconds."""
-    now = datetime.now()
-    if now - last_timestamp > timedelta(seconds=60):
-        last_timestamp = now - timedelta(seconds=60)
-    sample_time = timedelta(seconds=0.5)  # time between data points
-    next_timestamp = last_timestamp + sample_time
-    timestamps = np.arange(next_timestamp, now, sample_time)
-    sample_values = np.random.randn(len(timestamps), 2)
+    i[0]+=1
+    df = df.iloc[:i[0]]
+      
 
-    data = df[['activePowerT']]
-    
+    data = df[['activePowerA','activePowerB','activePowerC']]
+
     return data
 
 
 
-@st.fragment(run_every='0.5s')
+@st.fragment(run_every='0.1s')
 def show_latest_data(df):
 
     last_timestamp = st.session_state.data.index[-1]
     st.session_state.data = pd.concat(
-        [st.session_state.data, get_recent_data(last_timestamp,df)]
+        [st.session_state.data, get_recent_data(df)]
     )
-    st.session_state.data = st.session_state.data[-100:]
+    st.session_state.data = st.session_state.data[-300:]
     
-    st.line_chart(st.session_state.data)
+    st.line_chart(st.session_state.data,x_label="Time",y_label="ActivePower (kW)")
 
 
+@st.fragment(run_every="1s")
+def RTC():
+    now = datetime.now()
+    current_time = now.strftime("%D %H:%M:%S")
+    
+    st.metric(
+        label="Current Time",
+        value =current_time
+    )
 
 
 
