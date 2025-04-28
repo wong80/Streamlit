@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 # update clock
 
 
-client = firebase.initializeFirebase()
-rtdf = firebase.retrieveData(client)
+# client = firebase.initializeFirebase()
+# rtdf = firebase.retrieveData(client)
 # Page Config
 st.set_page_config(
     page_title="Real-Time Data Science Dashboard",
@@ -122,6 +122,7 @@ with data_tab:
 
 
 with prediction_tab:
+    fig3 = go.Figure()
     st.header("Predictions")
     fig3 = px.line(future_w_features['pred'],
                 x=future_w_features.index,
@@ -131,6 +132,20 @@ with prediction_tab:
                     labels=dict(dateTime="Date",activePowerT="Active Power (kW)")
                     )
     
+    fig3.update_layout(
+        xaxis=dict(
+            title=dict(
+                text="Date"
+            )
+        ),
+        yaxis=dict(
+        title=dict(
+            text="Active Power Predictions (kW)"
+        )
+     )
+    )
+
+    
     st.write(fig3)
 
 
@@ -138,6 +153,11 @@ with realtime_tab:
     st.header("Real Time Data")
     Ml.RTC()
 
+
+    df = firebase.test(1,30)
+    print(df.tail())
+    df = Ml.preprocessing(df)
     st.session_state.data = Ml.get_recent_data(df)
     Ml.show_latest_data(df)
+    # st.line_chart(df,x_label="Time",y_label="ActivePower (kW)",y=["power1","power2","power3"])
     st.dataframe(df)
