@@ -4,7 +4,11 @@ password="123456"
 import pyrebase
 import pandas as pd
 import csv
+<<<<<<< HEAD
 
+=======
+import Ml
+>>>>>>> parent of ffbdfec (stuff)
 firebaseConfig={"apiKey":"AIzaSyC2YV31UO6dqnaqBLJ2iuMWRkt35oU5Mvo",
                 "authDomain":"fyp-powermonitoring-b2afc.firebaseapp.com",
                 "databaseURL":"https://fyp-powermonitoring-b2afc-default-rtdb.asia-southeast1.firebasedatabase.app",
@@ -24,6 +28,8 @@ def initializeFirebase():
 
     return users
 
+
+# Retrieve Data from Database
 def retrieveData(users) -> pd.DataFrame:
     df = pd.DataFrame()
     for user in users.each():
