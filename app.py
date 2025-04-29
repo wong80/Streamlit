@@ -8,8 +8,6 @@ import time
 from datetime import datetime, timedelta
 
 
-# client = firebase.initializeFirebase()
-# rtdf = firebase.retrieveData(client)
 # Page Config
 st.set_page_config(
     page_title="Real-Time Data Science Dashboard",
@@ -150,8 +148,10 @@ with prediction_tab:
 with realtime_tab:
     st.header("Real Time Data")
     Ml.RTC()
-
+    # df = firebase.test(1,30)
+    df = Ml.get_data("Combined.xlsx")
+    print(df.tail())
+    # df = Ml.preprocessing(df)
     st.session_state.data = Ml.get_recent_data(df)
     Ml.show_latest_data(df)
-    # st.line_chart(df,x_label="Time",y_label="ActivePower (kW)",y=["power1","power2","power3"])
     st.dataframe(df)

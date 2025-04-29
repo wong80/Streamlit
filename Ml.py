@@ -7,8 +7,6 @@ import streamlit as st
 from datetime import datetime, timedelta
 from sklearn.preprocessing import LabelEncoder
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import LabelEncoder
-from sklearn.impute import KNNImputer
 from time import sleep
 FEATURES = ['hour','dayofweek','quarter','month','dayofyear','dayofmonth','weekofyear']
 
@@ -90,21 +88,22 @@ def predict(future_w_features,classifier):
   plt.show()
 
 
-
+# Run every second to update live data plot
+@st.fragment(run_every='1s')
 def get_recent_data(df,i=[0]):
 
     """Generate and return data from last timestamp to now, at most 60 seconds."""
     i[0]+=1
     df = df.iloc[:i[0]]
       
-
-    data = df[['activePowerA','activePowerB','activePowerC']]
+    # data = df[['power1','power2','power3']].astype(float)
+    data = df[['activePowerA','activePowerB','activePowerC']].astype(float)
 
     return data
 
 
-
-@st.fragment(run_every='0.1s')
+# Show latest data on real-time plot
+@st.fragment(run_every='0.5s')
 def show_latest_data(df):
 
     last_timestamp = st.session_state.data.index[-1]
@@ -113,9 +112,9 @@ def show_latest_data(df):
     )
     st.session_state.data = st.session_state.data[-30:]
     
-    st.line_chart(st.session_state.data,x_label="Time",y_label="ActivePower (kW)")
-
-
+    st.line_chart(st.session_state.data,x_label="Time",y_label="ActivePower (kW)",height=500)
+    
+# Show Real Time Data
 @st.fragment(run_every="1s")
 def RTC():
     now = datetime.now()
@@ -127,33 +126,6 @@ def RTC():
     )
 
 # Data Prepropcessing for ML
-def preprocessing(df):
-  df.reset_index(inplace=True)
-  df['dateTime']= pd.to_datetime(df['dateTime'])
-  df.set_index('dateTime')
-  
-  
-
-  le = LabelEncoder()
-  df['dateTime'] = le.fit_transform(df['dateTime'])
-  df.drop(0,axis=1,inplace=True)
-
-  imputer = KNNImputer(n_neighbors=5)
-  df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns, index=df.index)
-  df_imputed['dateTime'] = df_imputed['dateTime'].round().astype(int)
-  df_imputed['dateTime'] = le.inverse_transform(df_imputed['dateTime'])
-  print(df_imputed.head())
-  df = df_imputed.groupby(pd.Grouper(key='dateTime', axis=0, freq='h',dropna=False)).mean(numeric_only =True)
-  df['activePowerT']  = df['power1']+df['power2']+df['power3']
-  
-  # Create a full hourly range from 12 AM to 11 PM
-  full_hours = pd.date_range("2025-03-17 00:00:00", "2025-04-17 23:00:00", freq='h')
-
-  # Reindex to fill missing timestamps with NaN
-  df_full = df.reindex(full_hours)
-  df_full.fillna(0,inplace=True)
-  return df_full
-
 def preprocessing(df):
   df.reset_index(inplace=True)
   df['dateTime']= pd.to_datetime(df['dateTime'])
