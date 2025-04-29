@@ -151,7 +151,7 @@ with realtime_tab:
     # df = firebase.test(1,30)
     df = Ml.get_data("Combined.xlsx")
     print(df.tail())
-    df = Ml.preprocessing(df)
+    # df = Ml.preprocessing(df)
     st.session_state.data = Ml.get_recent_data(df)
     Ml.show_latest_data(df)
     st.dataframe(df)
