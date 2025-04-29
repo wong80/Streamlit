@@ -7,11 +7,7 @@ import firebase
 import time
 from datetime import datetime, timedelta
 
-# update clock
 
-
-client = firebase.initializeFirebase()
-rtdf = firebase.retrieveData(client)
 # Page Config
 st.set_page_config(
     page_title="Real-Time Data Science Dashboard",
@@ -39,7 +35,7 @@ data_tab, prediction_tab, realtime_tab= st.tabs(["Data","Predictions","Real Time
 
 
 
-
+# Data Display Tab
 with data_tab:
     # top-level filters
     month_filter = st.selectbox(r"$\textsf{\large Choose the Month:}$", ("January","February","March","April","May","June","July","August","September","October","November","December"))
@@ -120,8 +116,9 @@ with data_tab:
     st.markdown(r"$\textsf{\Large Detailed Data View}$") 
     st.dataframe(df)
 
-
+# Predictions Tab
 with prediction_tab:
+    fig3 = go.Figure()
     st.header("Predictions")
     fig3 = px.line(future_w_features['pred'],
                 x=future_w_features.index,
@@ -131,13 +128,30 @@ with prediction_tab:
                     labels=dict(dateTime="Date",activePowerT="Active Power (kW)")
                     )
     
+    fig3.update_layout(
+        xaxis=dict(
+            title=dict(
+                text="Date"
+            )
+        ),
+        yaxis=dict(
+        title=dict(
+            text="Active Power Predictions (kW)"
+        )
+     )
+    )
+
+    
     st.write(fig3)
 
-
+# Real-Time Monitoring Tab
 with realtime_tab:
     st.header("Real Time Data")
     Ml.RTC()
-
+    # df = firebase.test(1,30)
+    df = Ml.get_data("Combined.xlsx")
+    print(df.tail())
+    df = Ml.preprocessing(df)
     st.session_state.data = Ml.get_recent_data(df)
     Ml.show_latest_data(df)
     st.dataframe(df)
