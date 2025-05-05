@@ -49,7 +49,7 @@ def create_future(df) -> pd.DataFrame:
   df = add_lags(df)
   df = create_features(df)
 
-  future = pd.date_range('2024-07-01','2024-07-15',freq ='1h')
+  future = pd.date_range('2024-12-07','2024-12-22',freq ='1h')
   future_df = pd.DataFrame(index=future)
   future_df['isFuture']= True
   df['isFuture']=False
@@ -94,7 +94,7 @@ def get_recent_data(df,i=[0]):
 
 
 
-@st.fragment(run_every='0.1s')
+@st.fragment(run_every='0.5s')
 def show_latest_data(df):
 
     last_timestamp = st.session_state.data.index[-1]
