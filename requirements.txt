@@ -63,6 +63,6 @@ toml==0.10.2
 tornado==6.6
 typing_extensions==4.12.2
 tzdata==2025.1
-urllib3==2.7.0
+urllib3==2.8.0
 watchdog==6.0.0
 xgboost==2.1.3
