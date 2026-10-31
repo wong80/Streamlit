@@ -1,0 +1,322 @@
+name: Auto-fix Dependabot Alerts
+
+on:
+  workflow_call:
+    inputs:
+      severity-filter:
+        description: "Comma-separated severities to auto-fix (default: critical,high)"
+        required: false
+        type: string
+        default: "critical,high"
+      extra-labels:
+        description: "Comma-separated extra labels to add to the PR"
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      severity-filter:
+        description: "Comma-separated severities to auto-fix"
+        required: false
+        type: string
+        default: "critical,high"
+      extra-labels:
+        description: "Comma-separated extra labels to add to the PR"
+        required: false
+        type: string
+        default: ""
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: read
+
+concurrency:
+  group: dependabot-auto-fix
+  cancel-in-progress: false
+
+jobs:
+  auto-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch open alerts
+        id: alerts
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const filter = '${{ inputs.severity-filter || 'critical,high' }}'.toLowerCase().split(',').map(s => s.trim());
+            const extraLabels = '${{ inputs.extra-labels }}'.split(',').map(s => s.trim()).filter(Boolean);
+
+            let alerts;
+            try {
+              alerts = await github.paginate(github.rest.dependabot.listAlertsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100
+              });
+            } catch (e) {
+              if (e.status === 403 || e.message.includes('disabled')) {
+                core.warning(`Dependabot alerts are not enabled for this repository. Enable them in Settings → Code security → Dependabot alerts.`);
+                core.setOutput('count', '0');
+                return;
+              }
+              throw e;
+            }
+
+            const eligible = alerts.filter(a => {
+              const severity = a.security_vulnerability.severity.toLowerCase();
+              const relationship = a.dependency.relationship;
+              const patched = a.security_vulnerability.first_patched_version;
+              return filter.includes(severity) && relationship === 'direct' && patched !== null;
+            });
+
+            if (eligible.length === 0) {
+              core.info('No eligible alerts found.');
+              core.setOutput('count', '0');
+              return;
+            }
+
+            // Deduplicate by package — keep the alert needing the highest patched version
+            const byPackage = {};
+            for (const alert of eligible) {
+              const pkg = alert.dependency.package.name;
+              if (!byPackage[pkg] || alert.number > byPackage[pkg].number) {
+                byPackage[pkg] = alert;
+              }
+            }
+
+            const deduped = Object.values(byPackage);
+            core.setOutput('count', String(deduped.length));
+            core.setOutput('alerts', JSON.stringify(deduped.map(a => ({
+              number: a.number,
+              severity: a.security_vulnerability.severity,
+              package_name: a.dependency.package.name,
+              ecosystem: a.dependency.package.ecosystem,
+              manifest_path: a.dependency.manifest_path,
+              patched_version: a.security_vulnerability.first_patched_version.identifier,
+              vulnerable_range: a.security_vulnerability.vulnerable_version_range,
+              ghsa_id: a.security_advisory.ghsa_id,
+              summary: a.security_advisory.summary
+            }))));
+            core.setOutput('extra_labels', JSON.stringify(extraLabels));
+
+            core.info(`Found ${deduped.length} eligible alerts (${eligible.length} total, deduplicated by package).`);
+
+      - name: Checkout repository
+        if: steps.alerts.outputs.count != '0'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Process alerts
+        if: steps.alerts.outputs.count != '0'
+        uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { execSync } = require('fs') ? require('child_process') : {};
+            const fs = require('fs');
+            const alerts = JSON.parse('${{ steps.alerts.outputs.alerts }}'.replace(/'/g, "'"));
+            const extraLabels = JSON.parse('${{ steps.alerts.outputs.extra_labels }}'.replace(/'/g, "'"));
+
+            const run = (cmd) => {
+              console.log(`> ${cmd}`);
+              try {
+                return execSync(cmd, { encoding: 'utf8', stdio: 'pipe' });
+              } catch (e) {
+                console.log(`Command failed: ${e.stderr || e.message}`);
+                return null;
+              }
+            };
+
+            const defaultBranch = '${{ github.event.repository.default_branch }}' || 'main';
+            const results = { succeeded: [], failed: [], skipped: [] };
+
+            for (const alert of alerts) {
+              const { package_name: pkg, ecosystem, manifest_path, patched_version, number, ghsa_id, summary, severity } = alert;
+              const safePkg = pkg.replace(/\//g, '-');
+              let branch = `dependabot/${ecosystem}/${safePkg}`;
+
+              console.log(`\n--- Processing: ${pkg} → ${patched_version} (alert #${number}) ---`);
+
+              try {
+                // Check if branch already exists (fix already in progress)
+                const remoteBranch = run(`git ls-remote --heads origin ${branch}`);
+                if (remoteBranch && remoteBranch.trim()) {
+                  const fixBranch = `${branch}-fix`;
+                  const remoteFixBranch = run(`git ls-remote --heads origin ${fixBranch}`);
+                  if (remoteFixBranch && remoteFixBranch.trim()) {
+                    console.log(`Branches ${branch} and ${fixBranch} both exist — skipping.`);
+                    results.skipped.push({ pkg, reason: 'fix branch already exists' });
+                    continue;
+                  }
+                  branch = fixBranch;
+                }
+
+                // Check if a PR already exists for this package
+                const prs = await github.rest.pulls.list({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'open',
+                  head: `${context.repo.owner}:${branch}`
+                });
+                if (prs.data.length > 0) {
+                  console.log(`PR #${prs.data[0].number} already exists for ${branch} — skipping.`);
+                  results.skipped.push({ pkg, reason: `PR #${prs.data[0].number} exists` });
+                  continue;
+                }
+
+                // Create branch
+                run(`git checkout -B ${branch} origin/${defaultBranch}`);
+
+                // Apply fix based on ecosystem
+                let currentVersion = 'unknown';
+
+                if (ecosystem === 'npm') {
+                  const manifest = JSON.parse(fs.readFileSync(manifest_path, 'utf8'));
+                  for (const section of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+                    if (manifest[section] && manifest[section][pkg]) {
+                      const existing = manifest[section][pkg];
+                      currentVersion = existing.replace(/^[\^~>=<\s]+/, '');
+                      const prefix = existing.match(/^([\^~])/)?.[1] || '^';
+                      manifest[section][pkg] = `${prefix}${patched_version}`;
+                    }
+                  }
+                  fs.writeFileSync(manifest_path, JSON.stringify(manifest, null, 2) + '\n');
+                  run('npm install');
+                } else if (ecosystem === 'pip') {
+                  let content = fs.readFileSync(manifest_path, 'utf8');
+                  const regex = new RegExp(`^(${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})([=<>!~]+)(.+)$`, 'mi');
+                  const match = content.match(regex);
+                  if (match) {
+                    currentVersion = match[3].trim();
+                    content = content.replace(regex, `$1==${patched_version}`);
+                    fs.writeFileSync(manifest_path, content);
+                  }
+                } else if (ecosystem === 'gomod') {
+                  let content = fs.readFileSync(manifest_path, 'utf8');
+                  const regex = new RegExp(`(${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s+(v[\\d.]+)`, 'm');
+                  const match = content.match(regex);
+                  if (match) currentVersion = match[2];
+                  run(`go get ${pkg}@v${patched_version}`);
+                  run('go mod tidy');
+                } else if (ecosystem === 'nuget') {
+                  let content = fs.readFileSync(manifest_path, 'utf8');
+                  const regex = new RegExp(`(<PackageReference\\s+Include="${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\s+Version=")([^"]+)(")`);
+                  const match = content.match(regex);
+                  if (match) {
+                    currentVersion = match[2];
+                    content = content.replace(regex, `$1${patched_version}$3`);
+                    fs.writeFileSync(manifest_path, content);
+                  }
+                  run('dotnet restore');
+                } else if (ecosystem === 'github_actions') {
+                  let content = fs.readFileSync(manifest_path, 'utf8');
+                  const regex = new RegExp(`(uses:\\s*${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}@)(\\S+)`);
+                  const match = content.match(regex);
+                  if (match) {
+                    currentVersion = match[2];
+                    const major = patched_version.split('.')[0];
+                    content = content.replace(regex, `$1v${major}`);
+                    fs.writeFileSync(manifest_path, content);
+                  }
+                } else {
+                  console.log(`Unsupported ecosystem: ${ecosystem} — skipping.`);
+                  results.skipped.push({ pkg, reason: `unsupported ecosystem: ${ecosystem}` });
+                  run(`git checkout ${defaultBranch}`);
+                  continue;
+                }
+
+                // Check if anything changed
+                const diff = run('git diff --name-only');
+                if (!diff || !diff.trim()) {
+                  console.log('No changes detected — skipping.');
+                  results.skipped.push({ pkg, reason: 'no changes after update' });
+                  run(`git checkout ${defaultBranch}`);
+                  continue;
+                }
+
+                // Commit and push
+                run('git config user.name "github-actions[bot]"');
+                run('git config user.email "41898282+github-actions[bot]@users.noreply.github.com"');
+                run('git add -A');
+
+                const commitMsg = currentVersion !== 'unknown'
+                  ? `Bump ${pkg} from ${currentVersion} to ${patched_version}`
+                  : `Bump ${pkg} to ${patched_version}`;
+                run(`git commit -m "${commitMsg}"`);
+                run(`git push -u origin ${branch}`);
+
+                // Create PR
+                const title = commitMsg;
+                const labels = ['dependencies', ...extraLabels].filter(Boolean);
+                const body = [
+                  `Fixes Dependabot alert #${number}.`,
+                  '',
+                  `**${severity}**: ${summary}`,
+                  '',
+                  `Bumps [${pkg}](https://github.com/advisories/${ghsa_id}) to \`${patched_version}\`.`,
+                  '',
+                  '---',
+                  `*Created automatically by [auto-fix-alert](https://github.com/${context.repo.owner}/${context.repo.repo}) workflow.*`
+                ].join('\n');
+
+                try {
+                  const pr = await github.rest.pulls.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title,
+                    body,
+                    head: branch,
+                    base: defaultBranch
+                  });
+
+                  // Try to add labels (don't fail if label doesn't exist)
+                  try {
+                    await github.rest.issues.addLabels({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: pr.data.number,
+                      labels
+                    });
+                  } catch (e) {
+                    console.log(`Could not add labels: ${e.message}`);
+                  }
+
+                  console.log(`PR created: ${pr.data.html_url}`);
+                  results.succeeded.push({ pkg, pr_url: pr.data.html_url, from: currentVersion, to: patched_version });
+                } catch (e) {
+                  console.log(`PR creation failed: ${e.message}`);
+                  results.failed.push({ pkg, error: e.message });
+                }
+              } catch (e) {
+                console.log(`Failed to fix ${pkg}: ${e.message}`);
+                results.failed.push({ pkg, error: e.message });
+              }
+
+              // Return to default branch for next iteration
+              run(`git checkout ${defaultBranch}`);
+            }
+
+            // Summary
+            console.log('\n=== SUMMARY ===');
+            console.log(`Succeeded: ${results.succeeded.length}`);
+            for (const r of results.succeeded) {
+              console.log(`  ${r.pkg} ${r.from} → ${r.to}: ${r.pr_url}`);
+            }
+            console.log(`Failed: ${results.failed.length}`);
+            for (const r of results.failed) {
+              console.log(`  ${r.pkg}: ${r.error}`);
+            }
+            console.log(`Skipped: ${results.skipped.length}`);
+            for (const r of results.skipped) {
+              console.log(`  ${r.pkg}: ${r.reason}`);
+            }
+
+            if (results.failed.length > 0) {
+              core.setFailed(`${results.failed.length} alert(s) failed to fix.`);
+            }
