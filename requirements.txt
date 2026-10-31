@@ -60,7 +60,7 @@ smmap==5.0.2
 streamlit==1.54.0
 tenacity==9.0.0
 toml==0.10.2
-tornado==6.5.8
+tornado==6.6
 typing_extensions==4.12.2
 tzdata==2025.1
 urllib3==2.7.0
