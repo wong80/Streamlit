@@ -32,6 +32,7 @@ permissions:
   contents: write
   pull-requests: write
   security-events: read
+  vulnerability-alerts: read
 
 concurrency:
   group: dependabot-auto-fix
@@ -58,7 +59,7 @@ jobs:
                 per_page: 100
               });
             } catch (e) {
-              if (e.status === 403 || e.message.includes('disabled')) {
+              if (e.message.includes('disabled')) {
                 core.warning(`Dependabot alerts are not enabled for this repository. Enable them in Settings → Code security → Dependabot alerts.`);
                 core.setOutput('count', '0');
                 return;
@@ -80,10 +81,11 @@ jobs:
             }
 
             // Deduplicate by package — keep the alert needing the highest patched version
+            const patchedVersion = a => a.security_vulnerability.first_patched_version.identifier;
             const byPackage = {};
             for (const alert of eligible) {
-              const pkg = alert.dependency.package.name;
-              if (!byPackage[pkg] || alert.number > byPackage[pkg].number) {
+              const pkg = alert.dependency.package.name.toLowerCase();
+              if (!byPackage[pkg] || patchedVersion(alert).localeCompare(patchedVersion(byPackage[pkg]), undefined, { numeric: true }) > 0) {
                 byPackage[pkg] = alert;
               }
             }
@@ -116,12 +118,14 @@ jobs:
         uses: actions/github-script@v8
         env:
           GH_TOKEN: ${{ github.token }}
+          ALERTS: ${{ steps.alerts.outputs.alerts }}
+          EXTRA_LABELS: ${{ steps.alerts.outputs.extra_labels }}
         with:
           script: |
             const { execSync } = require('fs') ? require('child_process') : {};
             const fs = require('fs');
-            const alerts = JSON.parse('${{ steps.alerts.outputs.alerts }}'.replace(/'/g, "'"));
-            const extraLabels = JSON.parse('${{ steps.alerts.outputs.extra_labels }}'.replace(/'/g, "'"));
+            const alerts = JSON.parse(process.env.ALERTS);
+            const extraLabels = JSON.parse(process.env.EXTRA_LABELS);
 
             const run = (cmd) => {
               console.log(`> ${cmd}`);
